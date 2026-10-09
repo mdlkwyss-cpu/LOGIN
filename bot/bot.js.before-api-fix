@@ -1,0 +1,135 @@
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const Database = require('better-sqlite3');
+const crypto = require('crypto');
+
+const TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
+const DB_FILE = process.env.DATABASE_FILE || './keys.db';
+const PREFIX = process.env.KEY_PREFIX || 'IRONE';
+
+if (!TOKEN || !CLIENT_ID) {
+  console.error('Missing DISCORD_TOKEN or DISCORD_CLIENT_ID');
+  process.exit(1);
+}
+
+const db = new Database(DB_FILE);
+db.pragma('journal_mode = WAL');
+db.exec(`
+CREATE TABLE IF NOT EXISTS issued_keys (
+  discord_user_id TEXT PRIMARY KEY,
+  discord_tag TEXT NOT NULL,
+  key TEXT NOT NULL UNIQUE,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  used_at TEXT
+);
+`);
+
+function makeKey() {
+  const alphabet = '51b195adf3a18d08fd9507c1d9e8916675e76114daf93a28269ce330e7ddd37e';
+  let out = '';
+  for (let i = 0; i < 8; i++) {
+    out += alphabet[crypto.randomInt(alphabet.length)];
+  }
+  return `${PREFIX}-${out}`;
+}
+
+const findUser = db.prepare('SELECT * FROM issued_keys WHERE discord_user_id = ?');
+const insertKey = db.prepare(
+  'INSERT INTO issued_keys (discord_user_id, discord_tag, key) VALUES (?, ?, ?)'
+);
+
+async function createKeyFor(user) {
+  const existing = findUser.get(user.id);
+  if (existing) return { existing: true, key: existing.key };
+
+  let key;
+  while (true) {
+    key = makeKey();
+    try {
+      insertKey.run(user.id, user.tag, key);
+      return { existing: false, key };
+    } catch (e) {
+      if (!String(e.message).includes('UNIQUE')) throw e;
+    }
+  }
+}
+
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+const command = new SlashCommandBuilder()
+  .setName('key')
+  .setDescription('Get your one-time IRONE key');
+
+const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+async function registerCommand() {
+  if (GUILD_ID) {
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: [command.toJSON()] }
+    );
+    console.log('Registered /key in guild:', GUILD_ID);
+  } else {
+    await rest.put(
+      Routes.applicationCommands(CLIENT_ID),
+      { body: [command.toJSON()] }
+    );
+    console.log('Registered global /key');
+  }
+}
+
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand() || interaction.commandName !== 'key') return;
+
+  // This reply is EPHEMERAL: only the requesting Discord user can see it.
+  await interaction.deferReply({ ephemeral: true });
+
+  // Optional membership check.
+  if (GUILD_ID) {
+    try {
+      const guild = await client.guilds.fetch(GUILD_ID);
+      const member = await guild.members.fetch(interaction.user.id);
+      if (!member) {
+        return interaction.editReply({
+          content: '❌ يجب أن تكون عضوًا في سيرفر Discord للحصول على المفتاح.'
+        });
+      }
+    } catch {
+      return interaction.editReply({
+        content: '❌ يجب الانضمام إلى سيرفر Discord أولًا ثم استخدام /key.'
+      });
+    }
+  }
+
+  const result = await createKeyFor(interaction.user);
+
+  if (result.existing) {
+    return interaction.editReply({
+      content:
+        '⚠️ لقد طلبت مفتاحًا من قبل. لا يمكنك الحصول على مفتاح آخر.\n\n' +
+        'إذا كنت فقدت مفتاحك، لا يتم إنشاء مفتاح جديد لنفس الحساب.'
+    });
+  }
+
+  await interaction.editReply({
+    content:
+      `✅ **تم الحصول على مفتاحك بنجاح!**\n\n` +
+      `🔑 مفتاح IRONE الخاص بك:\n` +
+      `\`${result.key}\`\n\n` +
+      `⚠️ هذا المفتاح مرتبط بحساب Discord الخاص بك ويمكن استخدامه مرة واحدة فقط.`
+  });
+});
+
+(async () => {
+  await registerCommand();
+  await client.login(TOKEN);
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});

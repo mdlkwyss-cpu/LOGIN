@@ -1,0 +1,17 @@
+{
+  "name": "irone-discord-key-system",
+  "version": "1.1.0",
+  "private": true,
+  "description": "IRONE Discord one-time key bot and validation API",
+  "main": "start.js",
+  "scripts": {
+    "start": "node start.js",
+    "check": "node --check start.js && node --check api/server.js && node --check bot/bot.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "discord.js": "^14.25.1",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0"
+  }
+}
