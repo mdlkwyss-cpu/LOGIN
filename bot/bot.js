@@ -65,19 +65,34 @@ function makeKey() {
 async function createKeyFor(user) {
   await dbReady;
 
-  const existing = await pool.query(
-    'SELECT key FROM issued_keys WHERE discord_user_id = $1',
-    [user.id]
-  );
+  // حساب المسؤول وحده يستطيع إنشاء مفاتيح متعددة.
+  if (user.id !== OWNER_ID) {
+    const existing = await pool.query(
+      'SELECT key FROM issued_keys WHERE discord_user_id = $1',
+      [user.id]
+    );
 
-  if (existing.rowCount > 0) {
-    return { existing: true, key: existing.rows[0].key };
+    if (existing.rowCount > 0) {
+      return { existing: true, key: existing.rows[0].key };
+    }
   }
 
   while (true) {
     const key = makeKey();
 
     try {
+      if (user.id === OWNER_ID) {
+        // لا نربط مفاتيح المسؤول بقيد المفتاح الواحد لكل مستخدم.
+        await pool.query(
+          `INSERT INTO issued_keys
+            (discord_user_id, discord_tag, key)
+           VALUES ($1, $2, $3)`,
+          [`${user.id}:${crypto.randomUUID()}`, user.tag || user.username, key]
+        );
+
+        return { existing: false, key };
+      }
+
       const inserted = await pool.query(
         `INSERT INTO issued_keys (discord_user_id, discord_tag, key)
          VALUES ($1, $2, $3)
